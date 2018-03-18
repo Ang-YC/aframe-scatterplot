@@ -1,3 +1,7 @@
+### Notes: This is a fork from original author that aim to improve performance, code quality and features
+
+---
+
 # AFrame - Scatterplot
 
 ### Introduction
