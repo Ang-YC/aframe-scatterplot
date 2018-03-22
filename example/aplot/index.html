@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Tracked Controls</title>
+    <meta name="description" content="Tracked Controls – A-Frame">
+    <script src="https://aframe.io/releases/0.7.0/aframe.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/4.4.1/d3.min.js"></script>
+    <script src="../../dist/a-scatterplot.min.js"></script>
+    <script src="components/aabb-collider.js"></script>
+    <script src="components/grab.js"></script>
+    <script src="components/spin.js"></script>
+    <script src="components/zoom.js"></script>
+</head>
+<body>
+<a-scene fog="color: #bc483e; near: 0; far: 65;">
+    <a-assets>
+        <a-mixin id="cube"
+                 geometry="primitive: box; height: 1; width: 1; depth: 1"
+                 material="color: #EF2D5E; transparent: true; opacity: 0.2"></a-mixin>
+        <a-mixin id="cube-collided"
+                 material="color: #F2E646; transparent: true; opacity: 0.2"></a-mixin>
+        <a-mixin id="cube-grabbed"
+                 material="color: #F2E646; transparent: true; opacity: 0.2"></a-mixin>
+    </a-assets>
+    <!-- Hands -->
+    <a-entity hand-controls="left" aabb-collider="objects: .cube;" grab></a-entity>
+    <a-entity hand-controls="right" aabb-collider="objects: .cube;" grab></a-entity>
+
+    <a-entity class="cube" mixin="cube" position="0 1 -2" spin zoom>
+        <a-scatterplot position="-0.5 -0.5 -0.5" src="url(datasets/sample.json)" x="field1" y="field2" z="field3" val="field4" ></a-scatterplot>
+    </a-entity>
+
+    <a-camera></a-camera>
+
+    <a-entity light="type: point; color: #ffffff; intensity: 0.2; distance: 0" position="8 10 18"></a-entity>
+    <a-entity light="type: point; color: #ffffff; intensity: 0.6; distance: 0" position="-8 10 -18"></a-entity>
+    <a-entity light="type: ambient; color: #ffffff; intensity: 0.4;" position="-8 10 -18"></a-entity>
+
+    <a-sky color="#d9d9d9" radius="10"></a-sky>
+</a-scene>
+</body>
+</html>

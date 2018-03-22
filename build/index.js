@@ -33,6 +33,13 @@ AFRAME.registerComponent('dataplot', {
         // If available, color preset will be overriden
         pointcolor: { default: '', type: 'string' },
 
+        // Values to be filtered
+        valfil: { default: [], type: 'array' },
+        xfil: { default: [], type: 'array' },
+        yfil: { default: [], type: 'array' },
+        zfil: { default: [], type: 'array' },
+        sfil: { default: [], type: 'array' },
+
         // Relative limit of X, Y, Z dimension
         xlimit: { type: 'number', default: 1 },
         ylimit: { type: 'number', default: 1 },
@@ -79,7 +86,10 @@ AFRAME.registerComponent('dataplot', {
         floorMaterialParams: { type: 'string', default: 'color: #fff; opacity: 0.5; transparent: true;' },
 
         // Size of points
-        pointsize: { type: 'number', default: 1 }
+        pointsize: { type: 'number', default: 1 },
+
+        // Show value on hover
+        showValueOnHover: { type: 'boolean', default: false }
     },
 
     // TODO: (Ang) Improve on update
@@ -133,10 +143,173 @@ var customFragShader = [
 
 
 
+// Show value of points on hover
+function setupHighlight(el, particleSystem) {
+    var scene = el.sceneEl;
+    var mouse = new THREE.Vector2();
+    var camera = scene.camera;
+
+    // Prepare canvas
+    var textCanvas = document.createElement("canvas");
+    textCanvas.width = 1024;
+    textCanvas.height = 512;
+    var textContext = textCanvas.getContext("2d");
+    textContext.textAlign = "center";
+
+    function makeTextSprite(text, relPosition, absPosition) {
+        var padding = 5;
+        textContext.clearRect(0, 0, textCanvas.width, textCanvas.height);
+
+        // Fit text using binary search
+        var lo = 0, mid, hi = 128;
+        while (hi - lo > 0.5) {
+            mid = (lo + hi) / 2;
+            textContext.font = mid + "px Roboto";
+
+            var width = textContext.measureText(text).width;
+            if (width > textCanvas.width - (padding * 2)) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+
+        // Draw canvas
+        textContext.font = lo + "px Roboto";
+        var width  = textContext.measureText(text).width;
+        var height = lo;
+        var yOffset = 64;
+
+        textContext.fillStyle = "white";
+        textContext.fillRect(0, yOffset, textCanvas.width, height * 1.414);
+
+        textContext.fillStyle = "black";
+        textContext.lineWidth = 5;
+        textContext.strokeRect(0, yOffset, textCanvas.width, height * 1.414);
+        textContext.fillText(text, textCanvas.width / 2, yOffset + height);
+
+        // Texture using canvas
+        var texture = new THREE.Texture(textCanvas);
+        texture.needsUpdate = true;
+
+        // Make it on top of everything
+        var spriteMaterial = new THREE.SpriteMaterial({ map: texture });
+        spriteMaterial.depthWrite = false;
+        spriteMaterial.depthTest = false;
+
+        var sprite = new THREE.Sprite(spriteMaterial);
+        sprite.position.set(relPosition.x, relPosition.y, relPosition.z);
+        sprite.renderDepth = 1e20;
+
+        // Dynamic scale
+        var scale = absPosition.distanceTo(camera.getWorldPosition()) * (window.innerWidth / textCanvas.width);
+        sprite.scale.set(scale, scale / (textCanvas.width / textCanvas.height));
+
+        return sprite;
+    }
+
+    // Prepare highlight
+    var highlightedColor = new THREE.Color(0x000000);
+    var highlightedPoints = [];
+    var originalColor = {};
+
+    function render() {
+        // Use RayCaster to find the intersection
+        var raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(mouse, camera);
+        raycaster.params.Points.threshold = 0.05;
+        var intersects = raycaster.intersectObject(particleSystem, false);
+
+        highlightedPoints.forEach(function(i) {
+            var color = particleSystem.geometry.colors[i];
+            color.copy(originalColor[i]);
+        });
+        highlightedPoints = [];
+
+        if (intersects.length > 0) {
+            var minValue = Infinity;
+            var highlighted;
+
+            // Find the nearest point to ray
+            intersects.forEach(function(i) {
+                if (i.distanceToRay < minValue) {
+                    minValue = i.distanceToRay;
+                    highlighted = i;
+                }
+            });
+
+            // Highlight the point
+            var color = particleSystem.geometry.colors[highlighted.index];
+            originalColor[highlighted.index] = color.clone();
+            color.copy(highlightedColor.clone);
+            highlightedPoints.push(highlighted.index);
+
+            // Show the coordinate
+            var position = particleSystem.geometry.vertices[highlighted.index];
+            var textString = "(" + position.x.toFixed(4) + ", " + position.y.toFixed(4) + ", " + position.z.toFixed(4) + ")";
+            var textSprite = makeTextSprite(textString, position, highlighted.point);
+            el.setObject3D("point-position", textSprite);
+        } else {
+            if (el.getObject3D("point-position") !== undefined) {
+                el.removeObject3D("point-position");
+            }
+        }
+
+        particleSystem.geometry.colorsNeedUpdate = true;
+        requestAnimationFrame(render);
+    }
+
+    render();
+
+    // Allow mouse hovering
+    window.addEventListener("mousemove", function(e) {
+        mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    }, false);
+
+    function recompute() {
+        mouse.x = 0;
+        mouse.y = 0;
+    }
+
+    window.addEventListener("resize", recompute);
+    window.addEventListener("orientationchange", recompute);
+}
+
+
+
 function renderGeometryAndKeyFromPath(el, data) {
     
     d3.json(data.src, function(json) {
         var colorPreset = "colors." + data.colorpreset
+
+        var filterMap = {};
+
+        ["val", "x", "y", "z"].forEach(function(k) {
+            filterMap[k] = {};
+
+            var filterArray = splitAndParse(data[k + "fil"]);
+            filterArray.forEach(function(val) {
+                filterMap[k][val] = true;
+            });
+        });
+
+        function splitAndParse(dat) {
+            // Split if not array
+            if (!Array.isArray(dat)) {
+                dat = dat.split(",");
+            }
+
+            return dat.map(function(part) {
+                return parseFloat(part.trim(), 10);
+            });
+        }
+
+        json = json.filter(function(point) {
+            return !(["val", "x", "y", "z"].some(function(k) {
+                return (filterMap[k][point[data[k]]]);
+            }));
+        });
         
         // Figure out value ranges for the axes
         var stats = getDataStats(json, data, colorPreset);
@@ -239,7 +412,8 @@ function renderGeometryAndKeyFromPath(el, data) {
         // Create the particle system and add it to the scene
         var particleSystem = new THREE.Points(geometry, material);
         
-        el.setObject3D('mesh', particleSystem) // Can set 'particles' or 'mesh', not sure which is better...
+        el.setObject3D('particles', particleSystem); // Can set 'particles' or 'mesh', not sure which is better...
+        setupHighlight(el, particleSystem);
         
         // Add axes, tics, and title? 
         if (!data.nochrome) makeAxisAndKey(el, data, stats)
@@ -466,7 +640,7 @@ function createColorKey(el, stats, colorPreset, numdecimalplaces) {
         var labelV = new THREE.Vector3(v1Tick.x - 0.01, v1Tick.y, v1Tick.z + 1.04)
         var rot = {x: THREE.Math.degToRad(90), y: THREE.Math.degToRad(0), z: THREE.Math.degToRad(-90)}
         makeLine(el,[v1Tick,v2Tick], i, "colorKeyBaseLine")
-        addText(el, labelV, "colorKeyLabel" + i, "" + parseFloat(axisStatsVal[i].toFixed(numdecimalplaces)), 'left', rot)
+        addText(el, labelV, "colorKeyLabel" + i, "" + axisStatsVal[i].toFixed(numdecimalplaces), 'left', rot)
     })
 
     el.setObject3D('colorcube', mesh)
@@ -533,6 +707,34 @@ function renderGeometryFromRaw(el, data) {
     var json = JSON.parse(data.raw)
     var colorPreset = "colors." + data.colorpreset
     var geometry = new THREE.Geometry();
+
+    var filterMap = {};
+
+    ["val", "x", "y", "z"].forEach(function(k) {
+        filterMap[k] = {};
+
+        var filterArray = splitAndParse(data[k + "fil"]);
+        filterArray.forEach(function(val) {
+            filterMap[k][val] = true;
+        });
+    });
+
+    function splitAndParse(dat) {
+        // Split if not array
+        if (!Array.isArray(dat)) {
+            dat = dat.split(",");
+        }
+
+        return dat.map(function(part) {
+            return parseFloat(part.trim(), 10);
+        });
+    }
+
+    json = json.filter(function(point) {
+        return !(["val", "x", "y", "z"].some(function(k) {
+            return (filterMap[k][point[data[k]]]);
+        }));
+    });
 
     var stats = getDataStats(json, data, colorPreset)
     json.forEach(function(point){
@@ -693,6 +895,11 @@ AFRAME.registerPrimitive('a-scatterplot', {
         val: 'dataplot.val',
         colorpreset: 'dataplot.colorpreset',
         pointcolor: 'dataplot.pointcolor',
+        valfil: 'dataplot.valfil',
+        xfil: 'dataplot.xfil',
+        yfil: 'dataplot.yfil',
+        zfil: 'dataplot.zfil',
+        sfil: 'dataplot.sfil',
         xlimit: 'dataplot.xlimit',
         ylimit: 'dataplot.ylimit',
         zlimit: 'dataplot.zlimit',
@@ -712,6 +919,7 @@ AFRAME.registerPrimitive('a-scatterplot', {
         cage: 'dataplot.cage',
         showcolorbar: 'dataplot.showcolorbar',
         pointsprite: 'dataplot.pointsprite',
-        pointsize: 'dataplot.pointsize'
+        pointsize: 'dataplot.pointsize',
+        showvalueonhover: 'dataplot.showValueOnHover'
     }
 });
